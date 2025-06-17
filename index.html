@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Find-My-Pet</title>
+
+<!--  DESIGN TOKENS  -->
+<style>
+:root{
+  --accent:#5e9cff; --bg:#f5f7fb; --card:#fff; --border:#e1e4ea; --text:#2b303b;
+  --radius:12px;    --green:#22c55e; --orange:#f97316; --shadow:0 4px 8px rgba(0,0,0,.06);
+}
+@media(prefers-color-scheme:dark){
+  :root{--bg:#1e1e26;--card:#25252f;--border:#333642;--text:#e5e7eb;--shadow:none}
+}
+
+/*  LAYOUT  */
+html,body{margin:0;padding:0;font-family:Inter,Arial,sans-serif;background:var(--bg);color:var(--text)}
+header{background:var(--accent);color:#fff;padding:1rem 2rem;display:flex;justify-content:space-between;align-items:center}
+h1{margin:0;font-size:1.35rem;font-weight:600}
+main{max-width:960px;margin:2rem auto;padding:0 1rem}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);
+      padding:1.4rem;margin-bottom:1.6rem;box-shadow:var(--shadow)}
+.card h2{margin:0 0 .9rem;font-size:1.15rem;font-weight:600}
+
+/*  CONTROLS  */
+button,select,input[type=file]{font:inherit;margin:.45rem 0}
+button{background:var(--accent);color:#fff;border:none;border-radius:var(--radius);
+       padding:.48rem 1.15rem;font-weight:600;cursor:pointer}
+button:hover{background:#4689ef}
+button.secondary{background:#fff;color:var(--accent);border:1px solid var(--accent)}
+button.secondary:hover{background:rgba(255,255,255,.9)}
+
+/*  TABLE  */
+table{width:100%;border-collapse:collapse;font-size:.9rem}
+thead{background:var(--bg)}
+th,td{padding:.55rem .6rem;border-bottom:1px solid var(--border);text-align:left}
+tbody tr:nth-child(odd){background:rgba(0,0,0,.02)}
+img.thumb{height:44px;width:44px;object-fit:cover;border-radius:6px;box-shadow:var(--shadow)}
+
+/*  BADGES  */
+.badge{display:inline-block;padding:.1rem .55rem;border-radius:8px;font-size:.68rem;font-weight:600;color:#fff}
+.badge.OPEN{background:var(--orange)}
+.badge.MATCHED{background:var(--green)}
+
+/*  TOAST  */
+#toast{position:fixed;bottom:1.1rem;left:50%;transform:translateX(-50%);
+       background:var(--green);color:#fff;padding:.7rem 1.3rem;border-radius:30px;
+       box-shadow:0 6px 20px rgba(0,0,0,.18);font-weight:600;opacity:0;transition:.4s}
+#toast.show{opacity:1}
+
+/*  MOBILE  */
+@media(max-width:640px){
+  table,thead,tr{display:block}
+  thead{display:none}
+  tr{margin-bottom:1rem;background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow)}
+  td{display:flex;justify-content:space-between;padding:.6rem .9rem;border:none;border-bottom:1px solid var(--border)}
+  td:last-child{border:none}
+  td::before{content:attr(data-label);font-weight:600}
+  img.thumb{height:38px;width:38px}
+}
+
+footer{text-align:center;font-size:.8rem;color:#8a8f99;margin:3rem 0 1rem}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🐾 Find-My-Pet</h1>
+  <div>
+    <button id="signin">Sign&nbsp;in</button>
+    <button id="signout" class="secondary" style="display:none">Sign&nbsp;out</button>
+  </div>
+</header>
+
+<main>
+  <!-- Upload -->
+  <section class="card">
+    <h2>Upload a photo</h2>
+    <select id="reportType">
+      <option value="lost">Lost</option>
+      <option value="found">Found</option>
+    </select><br>
+    <input type="file" id="file" accept="image/*"><br>
+    <button id="upload">Send</button>
+    <p id="uploadMsg" style="color:#009688;font-weight:600"></p>
+  </section>
+
+  <!-- Latest -->
+  <section class="card">
+    <h2>Latest reports</h2>
+    <div id="tableWrap">Sign in to see reports…</div>
+  </section>
+</main>
+
+<footer>© 2025 Find-My-Pet demo</footer>
+<div id="toast">🎉 Match found!</div>
+
+<!-- Amplify -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/aws-amplify/3.3.9-sdk-bump.15/aws-amplify.min.js"></script>
+<script>
+(async ()=>{
+  /*  Amplify  --------------------------------------------------------- */
+  const {Amplify,Auth,API}=aws_amplify;
+  Amplify.configure({
+    aws_cognito_region          :'eu-north-1',
+    aws_user_pools_id           :'eu-north-1_gGs11vTU8',
+    aws_user_pools_web_client_id:'ktkjbr9pba7d6cd2ulr3fg9to',
+    oauth:{
+      domain         :'eu-north-1ggs11vtu8.auth.eu-north-1.amazoncognito.com',
+      scope          :['email','openid'],
+      redirectSignIn :'https://d151tnzh8ma0n4.cloudfront.net/',
+      redirectSignOut:'https://d151tnzh8ma0n4.cloudfront.net/',
+      responseType   :'code'
+    },
+    API:{endpoints:[{
+      name:'FindMyPetREST',
+      endpoint:'https://0c6e8yu5ma.execute-api.eu-north-1.amazonaws.com/prod',
+      region :'eu-north-1',
+      custom_header:async()=>{
+        try{
+          const tok=(await Auth.currentSession()).getIdToken().getJwtToken();
+          return {authorization:`Bearer ${tok}`};
+        }catch{return{}}
+      }
+    }]}
+  });
+
+  /*  helpers  --------------------------------------------------------- */
+  const $ = id=>document.getElementById(id);
+
+  /* 👉 Your bucket’s regional URL */
+  const s3Base = 'https://findmypet-uploads.s3.eu-north-1.amazonaws.com/';
+
+  const toast = msg=>{
+    const t=$('toast'); t.textContent=msg; t.classList.add('show');
+    setTimeout(()=>t.classList.remove('show'),4000);
+  };
+
+  const fmtDate = ts=>{
+    const d=new Date(`${ts.slice(0,4)}-${ts.slice(4,6)}-${ts.slice(6,8)}T${ts.slice(9,11)}:${ts.slice(11,13)}:${ts.slice(13,15)}Z`);
+    return d.toLocaleString(undefined,{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  };
+
+  function tableHtml(list){
+    if(!list?.length) return '(no reports yet)';
+    return `
+      <table>
+        <thead><tr><th>Type</th><th>Image</th><th>Labels</th><th>Status</th><th>Date</th></tr></thead>
+        <tbody>
+          ${list.sort((a,b)=>b.createdAt.localeCompare(a.createdAt)).map(r=>`
+            <tr data-id="${r.reportId}">
+              <td data-label="Type">${r.reportType}</td>
+              <td data-label="Image">
+                <img class="thumb" src="${s3Base}${encodeURIComponent(r.s3Key)}" alt="pet">
+              </td>
+              <td data-label="Labels">${(r.labels||[]).slice(0,3).join(', ')}</td>
+              <td data-label="Status"><span class="badge ${r.status}">${r.status}</span></td>
+              <td data-label="Date">${fmtDate(r.createdAt)}</td>
+            </tr>`).join('')}
+        </tbody>
+      </table>`;
+  }
+
+  async function refreshList(){
+    try{
+      const {data}=await API.get('FindMyPetREST','/reports',{response:true});
+      $('tableWrap').innerHTML=tableHtml(data);
+    }catch(e){
+      console.error(e); $('tableWrap').textContent='Error loading reports';
+    }
+  }
+
+  /*  auth -------------------------------------------------------------- */
+  async function authRefresh(){
+    try{
+      await Auth.currentAuthenticatedUser();
+      $('signin').style.display='none'; $('signout').style.display='';
+      refreshList();
+    }catch{
+      $('signin').style.display='';   $('signout').style.display='none';
+      $('tableWrap').textContent='Sign in to see reports…';
+    }
+  }
+  $('signin').onclick = ()=>Auth.federatedSignIn();
+  $('signout').onclick= ()=>Auth.signOut().then(()=>location.reload());
+
+  /*  upload ------------------------------------------------------------ */
+  $('upload').onclick = async ()=>{
+    $('uploadMsg').textContent='';
+    const file=$('file').files[0]; if(!file){alert('Choose a file');return;}
+
+    /*  presigned form  */
+    const {url,fields}=await API.post('FindMyPetREST','/signedurl',{
+      body:{filename:file.name,reportType:$('reportType').value}
+    });
+
+    /*  upload to S3  */
+    const fd=new FormData(); Object.entries(fields).forEach(([k,v])=>fd.append(k,v)); fd.append('file',file);
+    const s3=await fetch(url,{method:'POST',body:fd}); if(!s3.ok){alert('Upload to S3 failed');return;}
+    const s3Key=fields.key;                                // real key returned by backend
+
+    /*  register  */
+    const reg=await API.post('FindMyPetREST','/reports',{
+      body:{reportType:$('reportType').value,s3Key,filename:file.name},response:true
+    });
+    const newId=(reg.data||{}).id;
+
+    $('uploadMsg').textContent='Uploaded! Looking for matches…'; $('file').value=''; refreshList();
+
+    /*  poll  */
+    if(newId){
+      for(let i=0;i<10;i++){
+        await new Promise(r=>setTimeout(r,4000));
+        const {data}=await API.get('FindMyPetREST','/reports');
+        const mine=data.find(r=>r.reportId===newId);
+        if(mine?.status==='MATCHED'){toast('🎉 We found a match!');refreshList();break;}
+      }
+    }
+  };
+
+  /*  boot  */
+  authRefresh();
+})();
+</script>
+</body>
+</html>
